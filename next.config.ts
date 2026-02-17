@@ -1,12 +1,15 @@
 import withPWA from "next-pwa";
+import type { NextConfig } from "next";
+
+const baseConfig: NextConfig = {
+  // Aquí va tu config extra si tienes (headers, images, etc.)
+};
 
 const nextConfig = withPWA({
   dest: "public",
   register: true,
   skipWaiting: true,
   disable: process.env.NODE_ENV === "development",
-})({
-  // tu config existente (si tienes algo extra) puede ir aquí
-});
+})(baseConfig);
 
 export default nextConfig;
