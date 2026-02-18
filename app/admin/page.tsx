@@ -25,8 +25,6 @@ type Preview = {
   note: string | null;
   created_at: string | null;
   items: PreviewItem[];
-  branch_id?: string | null;
-  user_id?: string | null;
 };
 
 function cls(...xs: Array<string | false | null | undefined>) {
@@ -49,12 +47,6 @@ function addDays(date: Date, days: number) {
   const d = new Date(date);
   d.setDate(d.getDate() + days);
   return d;
-}
-function makeToParam(toYmd: string, include: boolean) {
-  if (!toYmd) return "";
-  if (!include) return toYmd;
-  const d = new Date(`${toYmd}T00:00:00`);
-  return ymd(addDays(d, 1));
 }
 function safeNum(v: any) {
   const x = Number(v);
@@ -101,7 +93,6 @@ export default function AdminPage() {
   const [rangePreset, setRangePreset] = useState<"today" | "yesterday" | "last7" | "last30" | "custom">("today");
   const [from, setFrom] = useState<string>(ymd(new Date()));
   const [to, setTo] = useState<string>(ymd(new Date()));
-  const [includeToday, setIncludeToday] = useState(true);
   const [limit, setLimit] = useState<string>("2000");
   const [mixes, setMixes] = useState<MixRow[]>([]);
   const [mixErr, setMixErr] = useState("");
@@ -110,11 +101,10 @@ export default function AdminPage() {
   const [compareOn, setCompareOn] = useState(false);
   const [cFrom, setCFrom] = useState<string>(ymd(addDays(new Date(), -7)));
   const [cTo, setCTo] = useState<string>(ymd(addDays(new Date(), -1)));
-  const [cIncludeToday, setCIncludeToday] = useState(false);
   const [cMixes, setCMixes] = useState<MixRow[]>([]);
   const [cErr, setCErr] = useState("");
 
-  // ✅ Vista previa (modal)
+  // preview modal
   const [previewOpen, setPreviewOpen] = useState(false);
   const [preview, setPreview] = useState<Preview | null>(null);
   const [pError, setPError] = useState("");
@@ -163,12 +153,12 @@ export default function AdminPage() {
 
   const branchName = useMemo(() => {
     const m = new Map(branches.map((b) => [b.id, b.name]));
-    return (id: string | null | undefined) => (id ? m.get(id) ?? id : "—");
+    return (id: string | null) => (id ? m.get(id) ?? id : "—");
   }, [branches]);
 
   const userName = useMemo(() => {
     const m = new Map(users.map((u) => [u.id, u.name]));
-    return (id: string | null | undefined) => (id ? m.get(id) ?? id : "—");
+    return (id: string | null) => (id ? m.get(id) ?? id : "—");
   }, [users]);
 
   async function loadBranches() {
@@ -216,7 +206,6 @@ export default function AdminPage() {
   async function loadMixesMain() {
     setMixErr("");
     const lim = Number(limit) || 2000;
-    const toParam = makeToParam(to, includeToday);
 
     if (mixBranch === "ALL") {
       const all: MixRow[] = [];
@@ -224,9 +213,9 @@ export default function AdminPage() {
         const qs = new URLSearchParams();
         qs.set("branch_id", b.id);
         qs.set("limit", String(lim));
-        if (from && toParam) {
+        if (from && to) {
           qs.set("from", from);
-          qs.set("to", toParam);
+          qs.set("to", to);
         }
         const a = await api(`/api/mixes/recent?${qs.toString()}`);
         if (!a.res.ok || !a.data?.ok) {
@@ -249,9 +238,9 @@ export default function AdminPage() {
     const qs = new URLSearchParams();
     qs.set("branch_id", mixBranch);
     qs.set("limit", String(lim));
-    if (from && toParam) {
+    if (from && to) {
       qs.set("from", from);
-      qs.set("to", toParam);
+      qs.set("to", to);
     }
 
     const a = await api(`/api/mixes/recent?${qs.toString()}`);
@@ -270,7 +259,6 @@ export default function AdminPage() {
     if (!compareOn) return;
 
     const lim = Number(limit) || 2000;
-    const toParam = makeToParam(cTo, cIncludeToday);
 
     if (mixBranch === "ALL") {
       const all: MixRow[] = [];
@@ -278,9 +266,9 @@ export default function AdminPage() {
         const qs = new URLSearchParams();
         qs.set("branch_id", b.id);
         qs.set("limit", String(lim));
-        if (cFrom && toParam) {
+        if (cFrom && cTo) {
           qs.set("from", cFrom);
-          qs.set("to", toParam);
+          qs.set("to", cTo);
         }
         const a = await api(`/api/mixes/recent?${qs.toString()}`);
         if (!a.res.ok || !a.data?.ok) {
@@ -300,9 +288,9 @@ export default function AdminPage() {
     const qs = new URLSearchParams();
     qs.set("branch_id", mixBranch);
     qs.set("limit", String(lim));
-    if (cFrom && toParam) {
+    if (cFrom && cTo) {
       qs.set("from", cFrom);
-      qs.set("to", toParam);
+      qs.set("to", cTo);
     }
 
     const a = await api(`/api/mixes/recent?${qs.toString()}`);
@@ -326,21 +314,7 @@ export default function AdminPage() {
 
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [
-    tab,
-    mixBranch,
-    from,
-    to,
-    includeToday,
-    limit,
-    compareOn,
-    cFrom,
-    cTo,
-    cIncludeToday,
-    mounted,
-    session,
-    branches.length,
-  ]);
+  }, [tab, mixBranch, from, to, limit, compareOn, cFrom, cTo, mounted, session, branches.length]);
 
   // USERS actions
   async function saveUser() {
@@ -433,7 +407,7 @@ export default function AdminPage() {
     loadInks();
   }
 
-  // ANALYTICS
+  // ANALYTICS (cliente)
   const mainTotal = mixes.length;
   const compTotal = cMixes.length;
 
@@ -480,43 +454,67 @@ export default function AdminPage() {
     setPreview(null);
     setPreviewOpen(true);
 
-    const a = await api(`/api/mixes/get?mix_id=${encodeURIComponent(mix_id)}`);
-    if (!a.res.ok || !a.data?.ok) {
-      setPError(a.data?.error || `Error vista previa (HTTP ${a.res.status})`);
-      return;
+    try {
+      const res = await fetch(`/api/mixes/get?mix_id=${encodeURIComponent(mix_id)}`, { cache: "no-store" });
+      const raw = await res.text();
+      const data = safeJson(raw);
+
+      if (!res.ok || !data?.ok) {
+        setPError(data?.error || `Error vista previa (HTTP ${res.status})`);
+        return;
+      }
+
+      const mix = data.mix ?? data;
+      const created_at: string | null = mix?.created_at ?? data.created_at ?? null;
+      const folio_num: number | null = safeNum(mix?.folio_num ?? data.folio_num);
+      const noteVal: string | null = (mix?.note ?? data.note ?? null) as any;
+
+      const itemsArr = Array.isArray(data.items) ? data.items : Array.isArray(mix?.items) ? mix.items : [];
+      const mapped: PreviewItem[] = itemsArr.map((it: any) => ({
+        code: String(it.code ?? it.ink_code ?? "").trim(),
+        name: String(it.name ?? it.ink_name ?? "").trim(),
+        qty: String(it.qty ?? it.amount ?? "").trim(),
+      }));
+
+      setPreview({
+        id: String(mix?.id ?? data.id ?? mix_id),
+        folio_num,
+        note: noteVal,
+        created_at,
+        items: mapped.filter((x) => x.code),
+      });
+
+      setTimeout(() => modalRef.current?.focus(), 50);
+    } catch (e: any) {
+      setPError(e?.message ?? "Error vista previa");
     }
-
-    const mix = a.data.mix ?? a.data;
-    const created_at: string | null = mix?.created_at ?? a.data.created_at ?? null;
-    const folio_num: number | null = safeNum(mix?.folio_num ?? a.data.folio_num);
-    const noteVal: string | null = (mix?.note ?? a.data.note ?? null) as any;
-    const branch_id = mix?.branch_id ?? a.data.branch_id ?? null;
-    const user_id = mix?.user_id ?? a.data.user_id ?? null;
-
-    const itemsArr = Array.isArray(a.data.items) ? a.data.items : Array.isArray(mix?.items) ? mix.items : [];
-    const mapped: PreviewItem[] = itemsArr.map((it: any) => ({
-      code: String(it.code ?? it.ink_code ?? "").trim(),
-      name: String(it.name ?? it.ink_name ?? "").trim(),
-      qty: String(it.qty ?? it.amount ?? "").trim(),
-    }));
-
-    setPreview({
-      id: String(mix?.id ?? a.data.id ?? mix_id),
-      folio_num,
-      note: noteVal,
-      created_at,
-      items: mapped.filter((x) => x.code),
-      branch_id,
-      user_id,
-    });
-
-    setTimeout(() => modalRef.current?.focus(), 50);
   }
 
   function closePreview() {
     setPreviewOpen(false);
     setPreview(null);
     setPError("");
+  }
+
+  async function deleteMix(mix_id: string) {
+    if (!confirm("¿Eliminar esta mezcla? Se borrará también su detalle (mix_items).")) return;
+
+    const a = await api("/api/admin/mixes/delete", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ mix_id }),
+    });
+
+    if (!a.res.ok || !a.data?.ok) {
+      alert(a.data?.error || `Error (HTTP ${a.res.status})`);
+      return;
+    }
+
+    setMsg("✅ Mezcla eliminada.");
+    if (tab === "mixes") {
+      loadMixesMain();
+      loadMixesCompare();
+    }
   }
 
   if (!mounted || !session) return null;
@@ -562,7 +560,7 @@ export default function AdminPage() {
               Recargar
             </button>
           </div>
-          {msg && <div className="mt-3 text-sm text-neutral-950 font-semibold whitespace-pre-wrap">{msg}</div>}
+          {msg && <div className="mt-3 text-sm text-neutral-950 whitespace-pre-wrap">{msg}</div>}
         </section>
 
         <div className="flex gap-2 flex-wrap">
@@ -650,7 +648,7 @@ export default function AdminPage() {
                 <tbody>
                   {users.map((u) => (
                     <tr key={u.id} className="border-b border-black/10">
-                      <td className="py-2 pr-3 font-semibold">{u.name}</td>
+                      <td className="py-2 pr-3">{u.name}</td>
                       <td className="py-2 pr-3">{u.role}</td>
                       <td className="py-2 pr-3">{branchName(u.branch_id)}</td>
                       <td className="py-2 pr-3">{u.active ? "Sí" : "No"}</td>
@@ -685,7 +683,7 @@ export default function AdminPage() {
             <div className="flex items-center justify-between flex-wrap gap-2">
               <div>
                 <div className="font-bold text-black">Tintas</div>
-                <div className="text-sm text-neutral-950 font-semibold">Desactivar = ocultar (puedes verlas con el checkbox).</div>
+                <div className="text-sm text-neutral-900">Desactivar = ocultar (puedes verlas con el checkbox).</div>
               </div>
               <label className="text-sm text-neutral-950 font-semibold flex items-center gap-2">
                 <input type="checkbox" checked={showInksInactive} onChange={(e) => setShowInksInactive(e.target.checked)} />
@@ -707,15 +705,7 @@ export default function AdminPage() {
                 <button className={BTN_B} onClick={saveInk}>
                   {inkId ? "Actualizar" : "Crear"}
                 </button>
-                <button
-                  className={BTN_W}
-                  onClick={() => {
-                    setInkId("");
-                    setICode("");
-                    setIName("");
-                    setMsg("");
-                  }}
-                >
+                <button className={BTN_W} onClick={() => { setInkId(""); setICode(""); setIName(""); setMsg(""); }}>
                   Limpiar
                 </button>
               </div>
@@ -734,7 +724,7 @@ export default function AdminPage() {
                 <tbody>
                   {inksShown.map((i) => (
                     <tr key={i.id} className="border-b border-black/10">
-                      <td className="py-2 pr-3 font-mono font-semibold">{i.code}</td>
+                      <td className="py-2 pr-3 font-mono">{i.code}</td>
                       <td className="py-2 pr-3">{i.name}</td>
                       <td className="py-2 pr-3">{i.active ? "Sí" : "No"}</td>
                       <td className="py-2">
@@ -762,13 +752,13 @@ export default function AdminPage() {
           </section>
         )}
 
-        {/* MIXES */}
+        {/* MIXES + ANALYTICS */}
         {tab === "mixes" && (
           <section className="bg-white border-2 border-black/10 rounded-2xl p-5">
             <div className="flex items-center justify-between flex-wrap gap-3">
               <div>
                 <div className="font-bold text-black">Mezclas</div>
-                <div className="text-sm text-neutral-950 font-semibold">Cambias parámetros y se actualiza solo.</div>
+                <div className="text-sm text-neutral-900">Cambias parámetros y se actualiza solo.</div>
               </div>
               <div className="text-sm font-semibold text-neutral-950">
                 Total: <span className="font-black">{mainTotal}</span>
@@ -819,13 +809,6 @@ export default function AdminPage() {
                 <input className={INP} value={limit} onChange={(e) => setLimit(e.target.value)} />
               </div>
 
-              <div className="md:col-span-2 flex items-end">
-                <label className="text-sm font-semibold text-neutral-950 flex items-center gap-2">
-                  <input type="checkbox" checked={includeToday} onChange={(e) => setIncludeToday(e.target.checked)} />
-                  Incluir “hoy” completo
-                </label>
-              </div>
-
               <div className="md:col-span-4 flex items-end gap-2">
                 <label className="text-sm font-semibold text-neutral-950 flex items-center gap-2">
                   <input type="checkbox" checked={compareOn} onChange={(e) => setCompareOn(e.target.checked)} />
@@ -843,12 +826,6 @@ export default function AdminPage() {
                     <div className="text-sm font-semibold text-black">Compare hasta</div>
                     <input className={INP} type="date" value={cTo} onChange={(e) => setCTo(e.target.value)} />
                   </div>
-                  <div className="md:col-span-2 flex items-end">
-                    <label className="text-sm font-semibold text-neutral-950 flex items-center gap-2">
-                      <input type="checkbox" checked={cIncludeToday} onChange={(e) => setCIncludeToday(e.target.checked)} />
-                      Incluir “hoy” completo (comparación)
-                    </label>
-                  </div>
                 </>
               )}
             </div>
@@ -858,12 +835,14 @@ export default function AdminPage() {
             <div className="mt-6 grid lg:grid-cols-3 gap-4">
               <div className="bg-neutral-50 border-2 border-black/10 rounded-2xl p-4">
                 <div className="font-bold text-black">Mejor igualador</div>
-                <div className="mt-2 text-sm text-neutral-950 font-semibold">
+                <div className="mt-2 text-sm text-neutral-900">
                   {bestUser ? (
                     <>
-                      <div className="text-neutral-950 font-black">{userName(bestUser.user_id)}</div>
-                      <div className="mt-1 text-neutral-950">
-                        Mezclas: <b className="font-black">{bestUser.count}</b>
+                      <div>
+                        <b>{userName(bestUser.user_id)}</b>
+                      </div>
+                      <div className="mt-1">
+                        Mezclas: <b>{bestUser.count}</b>
                       </div>
                     </>
                   ) : (
@@ -877,8 +856,8 @@ export default function AdminPage() {
                 <div className="mt-3 grid gap-2">
                   {byBranch.slice(0, 6).map((x) => (
                     <div key={x.branch_id}>
-                      <div className="flex justify-between text-sm text-neutral-950 font-semibold">
-                        <span>{branchName(x.branch_id)}</span>
+                      <div className="flex justify-between text-sm">
+                        <span className="font-semibold">{branchName(x.branch_id)}</span>
                         <span className="font-black">{x.count}</span>
                       </div>
                       <div className="h-2 bg-white border border-black/10 rounded">
@@ -895,8 +874,8 @@ export default function AdminPage() {
                 <div className="mt-3 grid gap-2">
                   {byDay.slice(-7).map((x) => (
                     <div key={x.day}>
-                      <div className="flex justify-between text-sm text-neutral-950 font-semibold">
-                        <span>{x.day}</span>
+                      <div className="flex justify-between text-sm">
+                        <span className="font-semibold">{x.day}</span>
                         <span className="font-black">{x.count}</span>
                       </div>
                       <div className="h-2 bg-white border border-black/10 rounded">
@@ -914,8 +893,8 @@ export default function AdminPage() {
               <div className="mt-3 grid gap-2">
                 {byUser.slice(0, 10).map((x) => (
                   <div key={x.user_id}>
-                    <div className="flex justify-between text-sm text-neutral-950 font-semibold">
-                      <span>{userName(x.user_id)}</span>
+                    <div className="flex justify-between text-sm">
+                      <span className="font-semibold">{userName(x.user_id)}</span>
                       <span className="font-black">{x.count}</span>
                     </div>
                     <div className="h-2 bg-white border border-black/10 rounded">
@@ -949,7 +928,7 @@ export default function AdminPage() {
                         <td className="py-2 pr-3">{dt.toLocaleString("es-MX")}</td>
                         <td className="py-2 pr-3">{branchName(m.branch_id)}</td>
                         <td className="py-2 pr-3">{userName(m.user_id)}</td>
-                        <td className="py-2 pr-3 font-black">{folio}</td>
+                        <td className="py-2 pr-3 font-semibold">{folio}</td>
                         <td className="py-2 pr-3">{m.note ?? ""}</td>
                         <td className="py-2">
                           <div className="flex gap-3 flex-wrap">
@@ -958,6 +937,9 @@ export default function AdminPage() {
                             </button>
                             <button className="underline decoration-yellow-400 decoration-2 font-semibold" onClick={() => openPreview(m.id)}>
                               Vista previa
+                            </button>
+                            <button className="underline decoration-red-500 decoration-2 font-semibold text-red-700" onClick={() => deleteMix(m.id)}>
+                              Eliminar
                             </button>
                           </div>
                         </td>
@@ -979,7 +961,7 @@ export default function AdminPage() {
         )}
       </div>
 
-      {/* ✅ MODAL VISTA PREVIA */}
+      {/* MODAL VISTA PREVIA */}
       {previewOpen && (
         <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4" onMouseDown={closePreview}>
           <div
@@ -996,23 +978,24 @@ export default function AdminPage() {
             </div>
 
             {pError && <div className="mt-3 text-sm font-semibold text-red-700">{pError}</div>}
-
             {!pError && !preview && <div className="mt-4 text-sm text-neutral-950 font-semibold">Cargando…</div>}
 
             {preview && (
               <div className="mt-4 grid gap-3">
                 <div className="text-sm text-neutral-950 font-semibold">
-                  Sucursal: <span className="font-black">{branchName(preview.branch_id)}</span>
+                  Folio:{" "}
+                  <span className="font-black">
+                    {preview.folio_num && preview.folio_num > 0 ? `Folio ${preview.folio_num}` : "—"}
+                  </span>
                 </div>
+
                 <div className="text-sm text-neutral-950 font-semibold">
-                  Igualador: <span className="font-black">{userName(preview.user_id)}</span>
+                  Fecha:{" "}
+                  <span className="font-black">
+                    {preview.created_at ? new Date(preview.created_at).toLocaleString("es-MX") : "—"}
+                  </span>
                 </div>
-                <div className="text-sm text-neutral-950 font-semibold">
-                  Folio: <span className="font-black">{preview.folio_num && preview.folio_num > 0 ? `Folio ${preview.folio_num}` : "—"}</span>
-                </div>
-                <div className="text-sm text-neutral-950 font-semibold">
-                  Fecha: <span className="font-black">{preview.created_at ? new Date(preview.created_at).toLocaleString("es-MX") : "—"}</span>
-                </div>
+
                 {preview.note && (
                   <div className="text-sm text-neutral-950 font-semibold">
                     Nota: <span className="font-black">{preview.note}</span>

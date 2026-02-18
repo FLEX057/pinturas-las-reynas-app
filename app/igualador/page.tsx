@@ -5,6 +5,8 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 type Role = "admin" | "cashier" | "mixer";
 type User = { id: string; name: string; role: Role; branch_id: string | null };
 
+type Branch = { id: string; name: string };
+
 type Ink = { id: string; code: string; name: string; active: boolean };
 
 type Item = { ink_code: string; ink_name: string; amount: string };
@@ -71,10 +73,16 @@ const BTN_B =
 const BTN_W =
   "bg-white text-black font-semibold rounded-xl px-4 py-2 border-2 border-black/20 hover:border-black/40 rounded-xl";
 
+const ACTIVE_BRANCH_KEY = "plr_active_branch";
+
 export default function IgualadorPage() {
   const [mounted, setMounted] = useState(false);
   const [user, setUser] = useState<User | null>(null);
   const [msg, setMsg] = useState("");
+
+  // sucursales (rotación)
+  const [branches, setBranches] = useState<Branch[]>([]);
+  const [activeBranchId, setActiveBranchId] = useState<string>("");
 
   // inks / captura
   const [inks, setInks] = useState<Ink[]>([]);
@@ -126,7 +134,58 @@ export default function IgualadorPage() {
     window.location.href = "/login";
   }
 
-  const canUse = useMemo(() => user?.role === "mixer" && !!user.branch_id, [user]);
+  // cargar sucursales
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await fetch("/api/branches/list", { cache: "no-store" });
+        const raw = await res.text();
+        const data = safeJson(raw);
+        if (!res.ok || !data?.ok) return;
+        const list: Branch[] = Array.isArray(data.branches) ? data.branches : [];
+        setBranches(list);
+      } catch {}
+    })();
+  }, []);
+
+  // decidir sucursal activa (preferimos la guardada; si no, la del usuario; si no, primera)
+  useEffect(() => {
+    if (!mounted) return;
+    if (!branches.length) return;
+
+    const saved = localStorage.getItem(ACTIVE_BRANCH_KEY) || "";
+    const savedOk = saved && branches.some((b) => b.id === saved);
+
+    if (savedOk) {
+      setActiveBranchId(saved);
+      return;
+    }
+
+    const userBranchOk = user?.branch_id && branches.some((b) => b.id === user.branch_id);
+    if (userBranchOk) {
+      setActiveBranchId(user!.branch_id!);
+      localStorage.setItem(ACTIVE_BRANCH_KEY, user!.branch_id!);
+      return;
+    }
+
+    // fallback: primera sucursal
+    setActiveBranchId(branches[0].id);
+    localStorage.setItem(ACTIVE_BRANCH_KEY, branches[0].id);
+  }, [mounted, branches, user?.branch_id]);
+
+  function onChangeActiveBranch(id: string) {
+    setActiveBranchId(id);
+    localStorage.setItem(ACTIVE_BRANCH_KEY, id);
+    // refresca historial en cuanto cambie
+    loadHistoryDebounced();
+  }
+
+  const activeBranchName = useMemo(() => {
+    const b = branches.find((x) => x.id === activeBranchId);
+    return b?.name ?? "—";
+  }, [branches, activeBranchId]);
+
+  const canUse = useMemo(() => user?.role === "mixer" && !!activeBranchId, [user, activeBranchId]);
 
   // cargar tintas
   useEffect(() => {
@@ -178,11 +237,11 @@ export default function IgualadorPage() {
   async function saveMix() {
     setMsg("");
     if (!user) return;
-    if (!canUse) return setMsg("No tienes sucursal asignada. Pídele al admin que te la ponga.");
+    if (!canUse) return setMsg("Selecciona una sucursal activa.");
     if (items.length === 0) return setMsg("Agrega al menos una tinta.");
 
     const payload = {
-      branch_id: user.branch_id,
+      branch_id: activeBranchId,
       user_id: user.id,
       note: note.trim() ? note.trim() : null,
       items: items.map((it) => ({ ink_code: it.ink_code, amount: n(it.amount) })),
@@ -204,7 +263,7 @@ export default function IgualadorPage() {
 
     const folioNum = safeNum(data.folio_num);
     const folioTxt = folioNum && folioNum > 0 ? `Folio ${folioNum}` : "Guardado";
-    setMsg(`✅ Mezcla guardada: ${folioTxt}`);
+    setMsg(`✅ Mezcla guardada (${activeBranchName}): ${folioTxt}`);
 
     setItems([]);
     setNote("");
@@ -243,18 +302,18 @@ export default function IgualadorPage() {
   useEffect(() => {
     if (!mounted || !user) return;
     if (user.role !== "mixer") return;
-    if (!user.branch_id) return;
+    if (!activeBranchId) return;
     loadHistoryDebounced();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mounted, user?.id, user?.branch_id, hPreset, hFrom, hTo, hIncludeToday, hLimit]);
+  }, [mounted, user?.id, activeBranchId, hPreset, hFrom, hTo, hIncludeToday, hLimit]);
 
   async function loadHistory() {
     setHError("");
-    if (!user?.branch_id) return;
+    if (!activeBranchId) return;
 
     const lim = Number(hLimit) || 200;
     const qs = new URLSearchParams();
-    qs.set("branch_id", user.branch_id);
+    qs.set("branch_id", activeBranchId);
     qs.set("limit", String(lim));
 
     const toParam = makeToParam(hTo, hIncludeToday);
@@ -307,7 +366,6 @@ export default function IgualadorPage() {
         return;
       }
 
-      // ✅ soporta respuesta plana o anidada { mix: {...}, items: [...] }
       const mix = data.mix ?? data;
       const created_at: string | null = mix?.created_at ?? data.created_at ?? null;
       const folio_num: number | null = safeNum(mix?.folio_num ?? data.folio_num);
@@ -346,47 +404,6 @@ export default function IgualadorPage() {
 
   if (!mounted || !user) return null;
 
-  // si eres mixer pero sin sucursal
-  if (user.role === "mixer" && !user.branch_id) {
-    return (
-      <main className="min-h-screen bg-neutral-50">
-        <div className="bg-black text-yellow-400">
-          <div className="mx-auto max-w-5xl px-4 py-4 flex items-center justify-between gap-4">
-            <div className="flex items-center gap-3">
-              <div className="h-14 w-14 bg-white rounded-xl p-1 flex items-center justify-center border border-yellow-300/40">
-                <img src="/logo.png" className="h-12 w-12 object-contain" alt="Logo" />
-              </div>
-              <div>
-                <div className="text-lg font-bold">Igualador</div>
-                <div className="text-xs text-yellow-200">{user.name}</div>
-              </div>
-            </div>
-            <button className={BTN_Y} onClick={logout}>
-              Salir
-            </button>
-          </div>
-        </div>
-
-        <div className="mx-auto max-w-5xl px-4 py-10">
-          <div className="bg-white border-2 border-black/10 rounded-2xl p-6">
-            <div className="font-bold text-black">Falta asignar sucursal</div>
-            <div className="text-sm text-neutral-950 font-semibold mt-2">
-              Tu usuario es <b>mixer</b>, pero no tiene sucursal. Entra a <b>/admin</b> y asígnale una.
-            </div>
-            <div className="mt-4 flex gap-2">
-              <button className={BTN_B} onClick={() => (window.location.href = "/admin")}>
-                Ir a Admin
-              </button>
-              <button className={BTN_W} onClick={logout}>
-                Cerrar sesión
-              </button>
-            </div>
-          </div>
-        </div>
-      </main>
-    );
-  }
-
   return (
     <main className="min-h-screen bg-neutral-50">
       {/* TOPBAR */}
@@ -408,6 +425,42 @@ export default function IgualadorPage() {
       </div>
 
       <div className="mx-auto max-w-5xl px-4 py-6 grid gap-6">
+        {/* SUCURSAL ACTIVA */}
+        <section className="bg-white border-2 border-black/10 rounded-2xl p-5">
+          <div className="flex items-center justify-between gap-3 flex-wrap">
+            <div>
+              <div className="font-bold text-black">Sucursal activa (rotación)</div>
+              <div className="text-sm text-neutral-950 font-semibold">
+                Todo se guarda y se consulta según esta sucursal.
+              </div>
+            </div>
+          </div>
+
+          <div className="mt-3 grid md:grid-cols-2 gap-3 items-end">
+            <div>
+              <div className="text-sm font-semibold text-black">Sucursal</div>
+              <select className={SEL} value={activeBranchId} onChange={(e) => onChangeActiveBranch(e.target.value)}>
+                <option value="">—</option>
+                {branches.map((b) => (
+                  <option key={b.id} value={b.id}>
+                    {b.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div className="text-sm text-neutral-950 font-semibold">
+              Actual: <span className="font-black">{activeBranchName}</span>
+            </div>
+          </div>
+
+          {!activeBranchId && (
+            <div className="mt-3 text-sm font-semibold text-red-700">
+              Selecciona una sucursal para poder guardar / ver historial.
+            </div>
+          )}
+        </section>
+
         {/* CAPTURA */}
         <section className="bg-white border-2 border-black/10 rounded-2xl p-5">
           <div className="font-bold text-black">Agregar tinta</div>
@@ -430,7 +483,10 @@ export default function IgualadorPage() {
             <div>
               <div className="text-sm font-semibold text-black">Cantidad</div>
               <input className={INP} value={amount} onChange={(e) => setAmount(e.target.value)} inputMode="decimal" />
-              <button className="mt-2 w-full bg-yellow-400 text-black font-semibold rounded-xl px-3 py-2 border-2 border-black" onClick={addItem}>
+              <button
+                className="mt-2 w-full bg-yellow-400 text-black font-semibold rounded-xl px-3 py-2 border-2 border-black"
+                onClick={addItem}
+              >
                 Agregar
               </button>
             </div>
@@ -458,7 +514,10 @@ export default function IgualadorPage() {
                     <td className="py-2 pr-3">{it.ink_name}</td>
                     <td className="py-2 pr-3">{it.amount}</td>
                     <td className="py-2">
-                      <button className="underline decoration-yellow-400 decoration-2 font-semibold" onClick={() => removeItem(it.ink_code)}>
+                      <button
+                        className="underline decoration-yellow-400 decoration-2 font-semibold"
+                        onClick={() => removeItem(it.ink_code)}
+                      >
                         Quitar
                       </button>
                     </td>
@@ -481,7 +540,7 @@ export default function IgualadorPage() {
           </div>
 
           <div className="mt-4 flex gap-2 items-center flex-wrap">
-            <button className={BTN_B} onClick={saveMix}>
+            <button className={BTN_B} onClick={saveMix} disabled={!activeBranchId}>
               Guardar y generar ticket
             </button>
             {msg && <div className="text-sm text-neutral-950 font-semibold whitespace-pre-wrap">{msg}</div>}
@@ -493,7 +552,9 @@ export default function IgualadorPage() {
           <div className="flex items-center justify-between flex-wrap gap-2">
             <div>
               <div className="font-bold text-black">Historial (reimpresión)</div>
-              <div className="text-sm text-neutral-950 font-semibold">Filtra por fechas y busca por folio.</div>
+              <div className="text-sm text-neutral-950 font-semibold">
+                Sucursal: <span className="font-black">{activeBranchName}</span>
+              </div>
             </div>
             <button className={BTN_W} onClick={() => loadHistoryDebounced()}>
               Actualizar
